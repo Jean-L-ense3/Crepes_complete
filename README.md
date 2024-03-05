@@ -1,6 +1,6 @@
 #############################
 # Jean Littaye - 2024/03/03 #
-# Under Ubuntu                    #
+# Under Ubuntu 20.04.6 LTS  #
 #############################
 
 # Crepes_complete
