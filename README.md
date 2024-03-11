@@ -5,11 +5,12 @@
 
 # Crepes_complete
 Short description:
+From the PhD project "Carbon Reconstructing Emulator, Parameter Estimation under Supervision", this first approach comes under the acronym "Carbon Ocean Model Parameter Learning, Early Toy Experiment".
 Repository for the paper "Learning-based calibration of ocean carbon models to tackle physical forcing uncertainties and observation sparsity."
 
 Longer description:
-This study is part of the PhD project "Carbon REconstructed Per an Emulator that is Supervised" (Carbone REconstruit Par Emulateur Supervisé).
-It contains 5 different files:
+This project (CREPES from the french acronym "Carbone REconstruit Par Emulateur Supervisé") introduces a learning approach to better constrain a biogeochemical model in a framework of sparse observations and erroneous physical forcings.
+This repository contains 5 different files:
 - spec-file.txt contains all the packages installed thanks to conda with the effective versions
 - Dataset_Generator_DA.py To generate the data sets for the DA-based method.
 - Dataset_Generator_NN.py To generate the data sets for the NN-based method.
