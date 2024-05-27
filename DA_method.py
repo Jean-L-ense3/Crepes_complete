@@ -12,7 +12,7 @@ case = 1
 obs_noise_perc = 1.
 nb_epochs = 100
 
-name_file = "DA_"+str(sampling_patt[0])+"d_"+str(sampling_patt[1])+"d_"+str(sampling_patt[2])+"d_"+str(sampling_patt[3])+"d_case"+str(case)+"/"
+name_file = f"DA_{sampling_patt[0]}d_{sampling_patt[1]}d_{sampling_patt[2]}d_{sampling_patt[3]}d_case{case}/"
 print("Start for the experiment: ", name_file)
 
 import matplotlib.pyplot as plt
