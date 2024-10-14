@@ -1,5 +1,5 @@
 """
-Created on February 2024
+Last update on June 2024
 
 @author: jlittaye
 """
@@ -21,6 +21,8 @@ import os
 import random
 from math import *
 
+from Functions import function_NPZD
+
 # Source of Nitrogen of the model
 global Q0
 Q0 = 4+2.5+1.5+0
@@ -29,59 +31,8 @@ global n_sum
 
 global device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# torch.set_default_device(device)
+torch.set_default_device(device)
 print(f"Device set to {device}")
-
-def function_NPZD(global_f, global_delta, N_0 = 4, P_0 = 2.5, Z_0 = 1.5, D_0 = 0, t_range = torch.arange(0, 365*5, 1/24), theta_values = torch.tensor([1., 1., 1., 1., 1., 1. ,1., 1., 1., 1.])) :
-    """Function that simulates the states from background, forcings and parameters along a time tensor."""
-    if len(theta_values.shape) == 1 :
-        theta_values = torch.ones([global_f.shape[0], 10])
-    nb_sample = global_f.shape[0]
-    Kn_ref = theta_values[:, 0]*1
-    Rm_ref = theta_values[:, 1]*2
-    g_ref = theta_values[:, 2]*0.1
-    lambda_Z_ref = theta_values[:, 3]*0.05
-    epsilon_ref = theta_values[:, 4]*0.1
-    alpha_ref = theta_values[:, 5]*0.3
-    beta_ref = theta_values[:, 6]*0.6
-    r_ref = theta_values[:, 7]*0.15
-    phi_ref = theta_values[:, 8]*0.4
-    Sw_ref = theta_values[:, 9]*0.1
-    f0 = torch.index_select(global_f, 1, torch.round(t_range*24).int())
-    delta = torch.index_select(global_delta, 1, torch.round(t_range*24).int())
-    Vm = 1. # Maximum growth rate (per day)
-    threshold = torch.tensor([0.01])
-    dt = (t_range[1]-t_range[0])
-    N_tensor = torch.zeros([nb_sample, len(t_range)])
-    P_tensor = torch.zeros([nb_sample, len(t_range)])
-    Z_tensor = torch.zeros([nb_sample, len(t_range)])
-    D_tensor = torch.zeros([nb_sample, len(t_range)])
-    
-    N_tensor[:, 0] = N_0
-    P_tensor[:, 0] = P_0
-    Z_tensor[:, 0] = Z_0
-    D_tensor[:, 0] = D_0
-
-    gamma_N_ref_array = []
-    zoo_graze_ref_array = []
-    for idx in range(1, len(t_range)):
-        t = idx - 1
-        gamma_N_ref   = N_tensor[:, t] / (Kn_ref + N_tensor[:, t])
-        zoo_graze_ref = Rm_ref * (1 - torch.exp(-lambda_Z_ref * torch.max(threshold, P_tensor[:, t]))) * torch.max(threshold, Z_tensor[:, t])
-        gamma_N_ref_array.append(gamma_N_ref)
-        zoo_graze_ref_array.append(zoo_graze_ref)
-        N_tensor[:, idx] = dt * (-Vm*gamma_N_ref*f0[:, t]*torch.max(threshold, P_tensor[:, t]) + alpha_ref*zoo_graze_ref + epsilon_ref*P_tensor[:, t] + g_ref*Z_tensor[:, t] + phi_ref*D_tensor[:, t] + delta[:, t]*(Q0 - N_tensor[:, t])) + N_tensor[:, t]
-        P_tensor[:, idx] = dt * (Vm*gamma_N_ref*f0[:, t]*torch.max(threshold, P_tensor[:, t]) - zoo_graze_ref - epsilon_ref*P_tensor[:, t] - r_ref*P_tensor[:, t] - delta[:, t]*P_tensor[:, t]) + P_tensor[:, t]
-        Z_tensor[:, idx] = dt * (beta_ref*zoo_graze_ref - g_ref*Z_tensor[:, t] - delta[:, t]*Z_tensor[:, t]) + Z_tensor[:, t]  
-        D_tensor[:, idx] = dt * (r_ref*P_tensor[:, t] + (1-alpha_ref-beta_ref)*zoo_graze_ref - phi_ref*D_tensor[:, t] - Sw_ref*D_tensor[:, t] - delta[:, t]*D_tensor[:, t]) + D_tensor[:, t]
-
-    t = idx
-    gamma_N_ref   = N_tensor[:, t] / (Kn_ref + N_tensor[:, t])
-    zoo_graze_ref = Rm_ref * (1 - torch.exp(-lambda_Z_ref * torch.max(threshold, P_tensor[:, t]))) * torch.max(threshold, Z_tensor[:, t])
-    gamma_N_ref_array.append(gamma_N_ref)
-    zoo_graze_ref_array.append(zoo_graze_ref)
-
-    return(t_range.repeat(nb_sample, 1), N_tensor, P_tensor, Z_tensor, D_tensor)
 
 
 def Forcing_Gen(t_range, physical_bias, var_HF, file_size) :
@@ -111,10 +62,10 @@ def Dataset_Gen(file_size, uncertainty_case, nb_annee_min = 2, nb_annee_max = 3,
     global n_sum
     ## HF variability parameters of the physical forcings:
     if uncertainty_case == 0 :
-        sigma_f = 0.0
-        sigma_d = 0.0
-        alpha_f = 0.0
-        alpha_d = 0.0
+        sigma_f = 0.05/50
+        sigma_d = 0.0008/50
+        alpha_f = 0.9
+        alpha_d = 0.8
     elif uncertainty_case == 1 :
         sigma_f = 0.05/50
         sigma_d = 0.0008/50
@@ -153,7 +104,13 @@ def Dataset_Gen(file_size, uncertainty_case, nb_annee_min = 2, nb_annee_max = 3,
     
     ## Generation of the HF variations of the physical forcings:
     Irradiance_True, Mixing_True = Forcing_Gen(t_range, Forcing_stats, var_HF[:, :, :, 0], file_size) ## True forcings
-    Irradiance_False, Mixing_False = Forcing_Gen(t_range, Forcing_stats, var_HF[:, :, :, 1], file_size)  ## Forcings with uncertainty
+    
+    if uncertainty_case == 0 : # We consider the HF variation of case 1, except that we know the exact forcing
+        Irradiance_False, Mixing_False = torch.clone(Irradiance_True), torch.clone(Mixing_True) # we perfectly know the forcings
+    else :
+        Irradiance_False, Mixing_False = Forcing_Gen(t_range, Forcing_stats, var_HF[:, :, :, 1], file_size)  
+
+    # Irradiance_False, Mixing_False = Forcing_Gen(t_range, Forcing_stats, var_HF[:, :, :, 1], file_size)  ## Forcings with uncertainty
     ## Generation of the states
     (x_1, N_1, P_1, Z_1, D_1) = function_NPZD(global_f = Irradiance_True, global_delta = Mixing_True, t_range = torch.arange(0, 365*nb_annee_max, 1/2), theta_values = Theta)
     States = torch.cat((x_1[:, 365*2*nb_annee_min:].unfold(1, 1, 1), N_1[:, 365*2*nb_annee_min:].unfold(1, 1, 1), P_1[:, 365*2*nb_annee_min:].unfold(1, 1, 1), Z_1[:, 365*2*nb_annee_min:].unfold(1, 1, 1), D_1[:, 365*2*nb_annee_min:].unfold(1, 1, 1)), dim = 2)
@@ -163,23 +120,22 @@ def Dataset_Gen(file_size, uncertainty_case, nb_annee_min = 2, nb_annee_max = 3,
     return Theta, torch.cat((Irradiance_False[:, :, None], Mixing_False[:, :, None]), dim = 2), torch.cat((Irradiance_True[:, :, None], Mixing_True[:, :, None]), dim = 2), States, seed, Forcing_stats
 
 
+if not os.path.isdir("Loading_files") : # Contains transcient data
+    os.makedirs("Loading_files") 
 
-print("Training dataset NN")
 ########################################################################
 ###################                                  ####################
 ################  Generation Brut Data to train the NN  ##################
 ###################                                  ####################
 ########################################################################
 ## Data is generated by "n_file = 5" packets of "file_size = 1000"
-name_save = "Generated_Datasets/NN/"
-for case in [1, 2, 3] :
+for case in [0, 1, 2, 3] :
     ti_whole = time.time()
+    name_save = "Generated_Datasets/NN/"
     name_file = "Case_"+str(case)+"/"
     if not os.path.isdir(name_save+name_file) :
         os.makedirs(name_save+name_file)
-    if not os.path.isdir("Loading_files") : # Contains transcient data
-        os.makedirs("Loading_files")        
-
+       
     n_file = 5
     file_size = 1000
     n_sum = n_file*file_size
@@ -193,7 +149,7 @@ for case in [1, 2, 3] :
         torch.save(False_forcings, "Loading_files/"+"False_forcings_"+str(n_file*file_size)+"data_"+str(nb_file)+".pt")
         torch.save(True_forcings, "Loading_files/"+"True_forcings_"+str(n_file*file_size)+"data_"+str(nb_file)+".pt")
         torch.save(States, "Loading_files/"+"States_"+str(n_file*file_size)+"data_"+str(nb_file)+".pt")
-        print("File n°", (nb_file+1), "/", n_file, " generated\n")
+        print("File n°", (nb_file+1), "/", n_file, " generated")
 ## Once the files are generated we concatenate them
     for nb_file in range(n_file) :
         if nb_file == 0 :
@@ -202,7 +158,6 @@ for case in [1, 2, 3] :
             False_forcings = torch.load("Loading_files/"+"False_forcings_"+str(n_file*file_size)+"data_"+str(nb_file)+".pt")
             True_forcings = torch.load("Loading_files/"+"True_forcings_"+str(n_file*file_size)+"data_"+str(nb_file)+".pt")
             States = torch.load("Loading_files/"+"States_"+str(n_file*file_size)+"data_"+str(nb_file)+".pt")
-            print("Shape of one state file: ", States.shape)
         else :
             Theta = torch.cat((Theta, torch.load("Loading_files/"+"Theta_"+str(n_file*file_size)+"data_"+str(nb_file)+".pt")), dim = 0)
             Phi_stats = torch.cat((Phi_stats, torch.load("Loading_files/"+"Phi_stats_"+str(n_file*file_size)+"data_"+str(nb_file)+".pt")), dim = 0)
@@ -220,9 +175,9 @@ for case in [1, 2, 3] :
 
 
 
-##########################################################
-################  Creation of the Dataset  ################
-##########################################################
+#########################################################
+################  Generation Dataset  ####################
+#########################################################
 ## Data are sampled (one sample per day)
     States_sampled = States[:, :, 1:].unfold(1, 1, 2)[:, :, :, 0] # Have been simulated with time-step of 1/2 day
     False_forcings_sampled = False_forcings.unfold(1, 1, 24)[:, 365*2:365*3, :, 0] # Have been simulated with time-step of 1h
@@ -263,8 +218,8 @@ for case in [1, 2, 3] :
     torch.save(mask_obs_error, name_save+name_file+"/Obs_matrix.pt")
 
 ## 80% for training, 20% for validation
-    DS_train = TensorDataset(torch.clone(inputs_sampled_noised_normalized[:int(n_file*file_size*0.8-1)+1, :, :]), torch.clone(outputs_normalized[:int(n_file*file_size*0.8-1)+1]))
-    DS_valid = TensorDataset(torch.clone(inputs_sampled_noised_normalized[int(n_file*file_size*0.8-1)+1:, :, :]), torch.clone(outputs_normalized[int(n_file*file_size*0.8-1)+1:]))
+    DS_train = TensorDataset(torch.clone(inputs_sampled_noised_normalized[:int(n_file*file_size*0.8-1), :, :]), torch.clone(outputs_normalized[:int(n_file*file_size*0.8-1)]))
+    DS_valid = TensorDataset(torch.clone(inputs_sampled_noised_normalized[int(n_file*file_size*0.8-1):, :, :]), torch.clone(outputs_normalized[int(n_file*file_size*0.8-1):]))
     torch.save(DS_train, name_save+name_file+"/DS_train")
     torch.save(DS_valid, name_save+name_file+"/DS_valid")
 
@@ -272,7 +227,7 @@ for case in [1, 2, 3] :
     del mean_output, mean_input, std_output, std_input, mask_obs_error, inputs_sampled_noised_normalized, outputs_normalized, DS_train, DS_valid, Theta, inputs_sampled_noised, inputs_sampled, False_forcings, False_forcings_sampled, True_forcings_sampled, True_forcings
 
     t_whole = time.time()-ti_whole
-    print(f"Training/validation datasets for the case {case} have been generated in {int(t_whole//3600)}h:{int((t_whole%3600)//60)}min:{int(((t_whole%3600)%60))}sec.")
+    print(f"Training/validation data for the case {case} have been generated in {int(t_whole//3600)}h:{int((t_whole%3600)//60)}min:{int(((t_whole%3600)%60))}sec.")
 
 
 
@@ -282,16 +237,14 @@ for case in [1, 2, 3] :
 ##################                                    ######################
 ###########################################################################
 
-print("Dataset for DA")
-name_save = "Generated_Datasets/DA/"
-for case in [1, 2, 3] :
+    print("Start test training dataset")
+    name_save = "Generated_Datasets/DA/"
     ti_whole = time.time()
     name_file = "Case_"+str(case)+"/"
     if not os.path.isdir(name_save+name_file) :
         os.makedirs(name_save+name_file)        
 
     file_size = 100
-    n_sum = file_size
 
     Theta, False_forcings, True_forcings, States, seeds, Phi_stats = Dataset_Gen(file_size, case, nb_annee_min = 2, nb_annee_max = 5)
 
@@ -304,7 +257,7 @@ for case in [1, 2, 3] :
 
 
 #############################################################
-################  Creation of the dataset  ###################
+################  Concatenating the data  ###################
 #############################################################
     ti, tf, dt = 365*0, 365*1, 1/2
 ## Data are sampled (one sample per day)
@@ -331,9 +284,9 @@ for case in [1, 2, 3] :
 
 
 ###########################################################################
-####################                                    #####################
-################  Generation Dataset to test the NN method  ###################
-####################                                    #####################
+##################                                    #####################
+################  Generation Dataset for the NN method  ###################
+##################                                    #####################
 ###########################################################################
     
     mean_x = torch.load(f"Generated_Datasets/NN/Case_{case}/mean_x.pt", map_location = device)
@@ -355,11 +308,11 @@ for case in [1, 2, 3] :
     inputs_sampled_normalized = torch.zeros(inputs_sampled.shape)
     for ch in range(inputs_sampled_normalized.shape[2]) :
         inputs_sampled_normalized[:, :, ch] = (inputs_sampled[:, :, ch]-mean_x[ch])/std_x[ch]
-    ## On normalise sortie (theta)
+    ## Normalize the output (theta)
     outputs_normalized = (Theta-mean_y)/std_y
 
     DS_test_NN = TensorDataset(inputs_sampled_normalized.moveaxis(1, 2), outputs_normalized)
     torch.save(DS_test_NN, name_save+name_file+"/DS_test_NN")
 
     t_whole = time.time()-ti_whole
-    print(f"Test data for the case {case} has been generated in {int(t_whole//3600)}h:{int((t_whole%3600)//60)}min:{int(((t_whole%3600)%60))}sec.")
+    print(f"Test data for the case {case} have been generated in {int(t_whole//3600)}h:{int((t_whole%3600)//60)}min:{int(((t_whole%3600)%60))}sec.\n")
