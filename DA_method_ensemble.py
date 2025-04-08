@@ -17,10 +17,10 @@ sampling_patt = [pat_1, pat_1, pat_2, pat_2]
 dt_NPZD = [int(sampling_patt[0]/dt), int(sampling_patt[1]/dt), int(sampling_patt[2]/dt), int(sampling_patt[3]/dt)]
 obs_noise_perc = 1.
 w_bg = 1e-2
-lr=1e-3
-nb_epochs = 100 # 50000
+lr = 1e-3
+nb_epochs = 100 #3000
 
-name_file = f"Res/DA_{sampling_patt[0]}d_{sampling_patt[1]}d_{sampling_patt[2]}d_{sampling_patt[3]}d_case{case}/"
+name_file = f"Res/DAens_{sampling_patt[0]}d_{sampling_patt[1]}d_{sampling_patt[2]}d_{sampling_patt[3]}d_case{case}/"
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -34,7 +34,7 @@ import os
 from os import listdir
 import random
 from math import *
-from Functions import DA, norm, validation_params, function_NPZD, clear_before_violinplot, get_rightcorner, get_topcorner
+from Functions import DA, DA_ensemble, norm, validation_params, function_NPZD, clear_before_violinplot, get_rightcorner, get_topcorner
 
 if not os.path.isdir(name_file) :
     os.makedirs(name_file)
@@ -69,62 +69,65 @@ Q0 = 4+2.5+1.5+0
 ##############################################################################################################################
 t_tensor = torch.arange(0, 365*5, 1/24)
 
-global_f_0, global_m_0 = torch.load(f"Generated_Datasets/DA/Case_{case}/True_forcings.pt", weights_only=False, map_location = device).moveaxis(2, 0)
-global_f_1, global_m_1 = torch.load(f"Generated_Datasets/DA/Case_{case}/False_forcings.pt", weights_only=False, map_location = device).moveaxis(2, 0)
+try :
+    global_f_1, global_m_1 = torch.load(f"Generated_Datasets/DA/Case_{case}/Ensemble_false_forcings_100.pt", map_location = device, weights_only=False).moveaxis(2, 0)
+except :
+    global_f_1, global_m_1 = torch.load(f"Generated_Datasets/DA/Case_{case}/Ensemble_false_forcings_20.pt", map_location = device, weights_only=False).moveaxis(2, 0)
+nb_ensemble = global_f_1.shape[-1]
 
-train_loader = torch.load(f"Generated_Datasets/DA/Case_{case}/TrainLoader.pt", weights_only=False, map_location = device)
-theta_target = torch.load(f"Generated_Datasets/DA/Case_{case}/Theta.pt", weights_only=False, map_location = device)
-mask_obs_err = torch.load(f"Generated_Datasets/DA/Case_{case}/Obs_matrix.pt", weights_only=False, map_location = device)
+train_loader = torch.load(f"Generated_Datasets/DA/Case_{case}/TrainLoader.pt", map_location = device, weights_only=False)
+theta_target = torch.load(f"Generated_Datasets/DA/Case_{case}/Theta.pt", map_location = device, weights_only=False)[:, :, None].repeat(1, 1, nb_ensemble)
+mask_obs_err = torch.load(f"Generated_Datasets/DA/Case_{case}/Obs_matrix.pt", map_location = device, weights_only=False)
 print("Forcings, states and parameters loaded")
 
-for x, y in train_loader :
-    print("Input shape: ", x.shape)
-    print("Output shape: ", y.shape)
-    break
+
 
 print("######################################\n######################################\n        Start Learning        \n######################################\n######################################")
-(costs, costs_ref, params_visu, x0) = DA(case, nb_version, epochs=nb_epochs, lr=lr, sampling_patt=sampling_patt, theta_target=theta_target, device = device, train_loader=train_loader, global_f=global_f_1, global_m=global_m_1, mask_obs_error=mask_obs_err, dt=dt, w_bg=w_bg)
+(costs, costs_ref, params_visu, x0_visu) = DA_ensemble(case, nb_version, epochs=nb_epochs, lr=lr, sampling_patt=sampling_patt, theta_target=theta_target, device = device, train_loader=train_loader, global_f=global_f_1, global_delta=global_m_1, mask_obs_error=mask_obs_err, dt=dt, w_bg=w_bg)
 
 ## Stores all the use/obtained variables/data into the same file
 torch.save(theta_target, name_file+f"version_{nb_version}/Tensor_thetatarget.pt")
-torch.save(torch.cat((global_f_0[None, :], global_f_1[None, :], global_m_0[None, :], global_m_1[None, :]), dim = 0), name_file+f"version_{nb_version}/Tensor_forcings.pt")
+
 torch.save(torch.cat((costs[None, :, :], costs_ref[None, :, :]), dim = 0), name_file+f"version_{nb_version}/Tensor_cost.pt")
 torch.save(params_visu, name_file+f"version_{nb_version}/Tensor_params.pt")
+torch.save(x0_visu, name_file+f"version_{nb_version}/Tensor_x0.pt")
 torch.save(train_loader, name_file+f"version_{nb_version}/Tensor_trainloader.pt")
-torch.save(x0, name_file+f"version_{nb_version}/Tensor_x0.pt")
+torch.save(torch.cat((global_f_1[None, :], global_m_1[None, :]), dim = 0), name_file+f"version_{nb_version}/Tensor_forcings.pt")
 
 
 ####################################################################
-#######################    VALIDATION    ###########################
-####################################################################
+# ######################    VALIDATION    ###########################
+# ###################################################################
 device = 'cpu'
 torch.set_default_device(device)
 
 
 print("Validation and plot of the metrics")
-mean_y = torch.load("Generated_Datasets/NN/Case_"+str(case)+"/mean_y.pt", map_location = device)
-std_y = torch.load("Generated_Datasets/NN/Case_"+str(case)+"/std_y.pt", map_location = device)
+mean_y = torch.load(f"../Generated_Datasets/Datasets_v3new/Case_{case}/mean_y.pt", map_location = device, weights_only=False)
+std_y = torch.load(f"../Generated_Datasets/Datasets_v3new/Case_{case}/std_y.pt", map_location = device, weights_only=False)
 
-params_visu = params_visu.to(device)
+params_visu = params_visu.to(device).mean(dim = 2)
+theta_target = theta_target.to(device).mean(dim = 2)
 costs = costs.to(device)
 
 best_index = torch.argmin(costs[:, :1] + w_bg*costs[:, 1:])
 theta_got = torch.clone(params_visu[:, :, best_index])
 theta_init = torch.clone(params_visu[:, :, 0])
 theta_target = theta_target.to(device)
-global_f_1 = global_f_1.to(device)
-global_m_1 = global_m_1.to(device)
 
-corr_tensor, corr_tensor_init = torch.zeros([2, global_f_0.shape[0], 4])
-shift_tensor, shift_tensor_init = torch.zeros([2, global_f_0.shape[0], 4])
-ampl_tensor, ampl_tensor_init = torch.zeros([2, global_f_0.shape[0], 4])
+global_f_1 = global_f_1[:, :, 0].to(device)
+global_m_1 = global_m_1[:, :, 0].to(device)
 
-(x_ref, N_ref, P_ref, Z_ref, D_ref) = function_NPZD(t_range = torch.arange(0*365, 5*365, dt), global_f = global_f_1, global_m = global_m_1, theta_values = theta_target)
-(x_pred, N_pred, P_pred, Z_pred, D_pred) = function_NPZD(t_range = torch.arange(0*365, 5*365, dt), global_f = global_f_1, global_m = global_m_1, theta_values = theta_got)
-(x_init, N_init, P_init, Z_init, D_init) = function_NPZD(t_range = torch.arange(0*365, 5*365, dt), global_f = global_f_1, global_m = global_m_1, theta_values = theta_init)
+corr_tensor, corr_tensor_init = torch.zeros([2, global_f_1.shape[0], 4])
+shift_tensor, shift_tensor_init = torch.zeros([2, global_f_1.shape[0], 4])
+ampl_tensor, ampl_tensor_init = torch.zeros([2, global_f_1.shape[0], 4])
+
+(x_ref, N_ref, P_ref, Z_ref, D_ref) = function_NPZD(t_range = torch.arange(0*365, 5*365, dt), global_f = global_f_1, global_delta = global_m_1, theta_values = theta_target)
+(x_pred, N_pred, P_pred, Z_pred, D_pred) = function_NPZD(t_range = torch.arange(0*365, 5*365, dt), global_f = global_f_1, global_delta = global_m_1, theta_values = theta_got)
+(x_init, N_init, P_init, Z_init, D_init) = function_NPZD(t_range = torch.arange(0*365, 5*365, dt), global_f = global_f_1, global_delta = global_m_1, theta_values = theta_init)
 
 ti = time.time()
-for i_val in range(global_f_0.shape[0]) :
+for i_val in range(global_f_1.shape[0]) :
     tepoch = time.time()
     (corr_tensor[i_val, 0], shift_tensor[i_val, 0], ampl_tensor[i_val, 0]) = validation_params(N_ref[i_val, int(365*4/dt):], N_pred[i_val, int(365*4/dt):])
     (corr_tensor[i_val, 1], shift_tensor[i_val, 1], ampl_tensor[i_val, 1]) = validation_params(P_ref[i_val, int(365*4/dt):], P_pred[i_val, int(365*4/dt):])
@@ -135,7 +138,7 @@ for i_val in range(global_f_0.shape[0]) :
     (corr_tensor_init[i_val, 1], shift_tensor_init[i_val, 1], ampl_tensor_init[i_val, 1]) = validation_params(P_ref[i_val, int(365*4/dt):], P_init[i_val, int(365*4/dt):])
     (corr_tensor_init[i_val, 2], shift_tensor_init[i_val, 2], ampl_tensor_init[i_val, 2]) = validation_params(Z_ref[i_val, int(365*4/dt):], Z_init[i_val, int(365*4/dt):])
     (corr_tensor_init[i_val, 3], shift_tensor_init[i_val, 3], ampl_tensor_init[i_val, 3]) = validation_params(D_ref[i_val, int(365*4/dt):], D_init[i_val, int(365*4/dt):])
-    sys.stdout.write("\rValidation n°"+str(1+i_val)+"/"+str(global_f_0.shape[0])+" within %.2f" % (time.time()-tepoch)+"s, still %.2f" %((time.time()-tepoch)*(global_f_0.shape[0]-1-i_val))+"s.")
+    sys.stdout.write("\rValidation n°"+str(1+i_val)+"/"+str(global_f_1.shape[0])+" within %.2f" % (time.time()-tepoch)+"s, still %.2f" %((time.time()-tepoch)*(global_f_1.shape[0]-1-i_val))+"s.")
 
 print("\n Validation ended in %.2f" %(time.time()-ti) + "s !\n")
 torch.save(corr_tensor, name_file+f"version_{nb_version}/Validation_tensor_corr.pt")
@@ -146,9 +149,11 @@ torch.save(ampl_tensor, name_file+f"version_{nb_version}/Validation_tensor_ampl.
 corr_tensor, shift_tensor, ampl_tensor = clear_before_violinplot(corr_tensor, shift_tensor, ampl_tensor)
 corr_tensor_init, shift_tensor_init, ampl_tensor_init = clear_before_violinplot(corr_tensor_init, shift_tensor_init, ampl_tensor_init)
 
+
+
 ####################################################################
-########################      PLOT      ############################
-####################################################################
+# #######################      PLOT      ############################
+# ###################################################################
 print("Plot of the variational cost evolution")
 plt.figure(figsize = [6.4*2, 4.8*0.7])
 plt.figure(figsize = [6.4*2, 4.8*0.7])
@@ -163,7 +168,7 @@ plt.legend()
 plt.tight_layout()
 plt.savefig(name_file+f"version_{nb_version}/Plot_varcost", dpi = 200)
 
-#############################################
+
 print("Plot of the parameters evolution")
 params_list = [r"$\chi$", r"$\rho$", r"$\gamma$", r"$\lambda$", r"$\epsilon$", r"$\alpha$", r"$\beta$", r"$\eta$", r"$\varphi$", r'$\zeta$']
 
@@ -189,8 +194,7 @@ with torch.no_grad() :
 plt.tight_layout()
 plt.savefig(name_file+f"version_{nb_version}/Plot_avg_parameters", dpi = 200)
 
-#############################################
-
+""
 color_params = [["#a055b5", "#8f04b5"]]
 color_NPZD = [["#bebada", "#8d84d1"], ["#8dd3c7", "#33ab96"], ["#fb8072", "#eb4431"], ["#e5d8bd", "#deb766"]]
 
@@ -216,12 +220,12 @@ for i in range(1, 5) :
     ampl_to_plot = torch.ones(ampl_tensor.shape)*torch.nan
     ampl_to_plot[:, i-1] = ampl_tensor[:, i-1]
     c_DA.append(ax_corr.violinplot(corr_to_plot, showextrema=False))
-    s_DA.append(ax_shift.violinplot(abs(shift_to_plot), showextrema=False))
+    s_DA.append(ax_shift.violinplot(shift_to_plot, showextrema=False))
     r_DA.append(ax_ampl.violinplot(ampl_to_plot, showextrema=False))
 p_DA = ax_param.violinplot(((theta_got-theta_target)/mean_y), showextrema=False)
 
 i_DA.append(ax_corr.violinplot(corr_tensor_init, showextrema=False))
-i_DA.append(ax_shift.violinplot(abs(shift_tensor_init), showextrema=False))
+i_DA.append(ax_shift.violinplot(shift_tensor_init, showextrema=False))
 i_DA.append(ax_ampl.violinplot(ampl_tensor_init, showextrema=False))
 i_DA.append(ax_param.violinplot(((theta_init-theta_target)/mean_y), showextrema=False))
 
@@ -236,7 +240,7 @@ for pc in p_DA['bodies']: # params
     pc.set_edgecolor(color_params[0][1])
     pc.set_linewidth(3)
 for i in range(10) :
-    ax_param.vlines(i+1, ((theta_got-theta_target)/mean_y)[:, i].min().item(), (torch.sqrt((theta_got-theta_target)**2)/mean_y)[:, i].max().item(), color=color_params[0][1], linestyle='-.', lw=2)
+    ax_param.vlines(i+1, ((theta_got-theta_target)/mean_y)[:, i].min().item(), ((theta_got-theta_target)/mean_y)[:, i].max().item(), color=color_params[0][1], linestyle='-.', lw=2)
     ax_param.hlines(((theta_got-theta_target)/mean_y)[:, i].min().item(), xmin = i+0.9, xmax = i+1.1, color=color_params[0][1], linestyle='-', lw=2)
     ax_param.hlines(((theta_got-theta_target)/mean_y)[:, i].max().item(), xmin = i+0.9, xmax = i+1.1, color=color_params[0][1], linestyle='-', lw=2)
 

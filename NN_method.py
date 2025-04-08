@@ -1,5 +1,5 @@
 """
-Last update on June 2024
+Last update on April 2025
 
 @author: jlittaye
 """
@@ -14,10 +14,11 @@ pat_2 = int(sys.argv[3])
 sampling_patt = [pat_1, pat_1, pat_2, pat_2]
 
 lr = 1e-4
-nb_epochs = 1000
+nb_epochs = 10000
 dt = 1/2
+model = str(sys.argv[4])
 
-name_file = "Res/NN_"+str(sampling_patt[0])+"d_"+str(sampling_patt[1])+"d_"+str(sampling_patt[2])+"d_"+str(sampling_patt[3])+"d_case"+str(case)+"/"
+name_file = f"Res/NN_{sampling_patt[0]}d_{sampling_patt[1]}d_{sampling_patt[2]}d_{sampling_patt[3]}d_case{case}_{model}/"
 btch_size = 512
 
 Q0 = 4+2.5+1.5+0
@@ -46,7 +47,7 @@ from lightning.pytorch import loggers as pl_loggers
 from lightning.pytorch.loggers import CSVLogger
 
 
-from Functions import validation_params, clear_before_violinplot, function_NPZD, data_sampling, ModelNN, get_rightcorner, get_topcorner
+from Functions import validation_params, clear_before_violinplot, function_NPZD, data_sampling, get_rightcorner, get_topcorner, Model_MLP, ModelNN, Model_UNet
 
 if not os.path.isdir(name_file) :
     os.makedirs(name_file)
@@ -79,23 +80,28 @@ device = "cpu" #torch.device("cuda" if torch.cuda.is_available() else "cpu") ###
 torch.set_default_device(device)
 print("Par défaut, device set to : ", device)
 
-training_dataset = torch.load("Generated_Datasets/NN/Case_"+str(case)+"/DS_train", map_location = device)
-validation_dataset = torch.load("Generated_Datasets/NN/Case_"+str(case)+"/DS_valid", map_location = device)
+training_dataset = torch.load(f"Generated_Datasets/NN/Case_{case}/DS_train", map_location = device, weights_only=False)
+validation_dataset = torch.load(f"Generated_Datasets/NN/Case_{case}/DS_valid", map_location = device, weights_only=False)
 
 sampled_training_dataset = data_sampling(training_dataset, sampling_patt = sampling_patt)
 sampled_validation_dataset = data_sampling(validation_dataset, sampling_patt = sampling_patt)
 
-mean_x = torch.load("Generated_Datasets/NN/Case_"+str(case)+"/mean_x.pt", map_location = 'cpu')
-std_x = torch.load("Generated_Datasets/NN/Case_"+str(case)+"/std_x.pt", map_location = 'cpu')
-mean_y = torch.load("Generated_Datasets/NN/Case_"+str(case)+"/mean_y.pt", map_location = 'cpu')
-std_y = torch.load("Generated_Datasets/NN/Case_"+str(case)+"/std_y.pt", map_location = 'cpu')	
+mean_x = torch.load(f"Generated_Datasets/NN/Case_{case}/mean_x.pt", map_location = 'cpu', weights_only=False)
+std_x = torch.load(f"Generated_Datasets/NN/Case_{case}/std_x.pt", map_location = 'cpu', weights_only=False)
+mean_y = torch.load(f"Generated_Datasets/NN/Case_{case}/mean_y.pt", map_location = 'cpu', weights_only=False)
+std_y = torch.load(f"Generated_Datasets/NN/Case_{case}/std_y.pt", map_location = 'cpu', weights_only=False)
 
 training_DL = DataLoader(sampled_training_dataset, batch_size=btch_size, shuffle=True, generator = torch.Generator(device))
 validation_DL = DataLoader(sampled_validation_dataset, batch_size=btch_size, shuffle=True, generator = torch.Generator(device))
 
 epoch_i = 0
 
-MyNet = ModelNN(mean = mean_y, std = std_y, lr = lr, sampling_patt = sampling_patt)
+if model == "CNN" :
+    MyNet = ModelNN(mean = mean_y, std = std_y, lr = lr, sampling_patt = sampling_patt)
+elif model == 'MLP' :
+    MyNet = Model_MLP(mean = mean_y, std = std_y, lr = lr, sampling_patt = sampling_patt)
+elif model == 'UNET' :
+    MyNet = Model_UNet(mean = mean_y, std = std_y, lr = lr, sampling_patt = sampling_patt)
 MyNet.to(device)
 
 
@@ -133,11 +139,11 @@ device = 'cpu'
 torch.set_default_device(device)
 mean_y = mean_y.to(device); std_y = std_y.to(device)
 
-DS = torch.load(f"Generated_Datasets/DA/Case_{case}/DS_test_NN", map_location = device)
+DS = torch.load(f"Generated_Datasets/DA/Case_{case}/DS_test_NN", map_location = device, weights_only=False)
 DL = DataLoader(DS, batch_size = 100)
-global_f_0, global_delta_0 = torch.load(f"Generated_Datasets/DA/Case_{case}/True_forcings.pt", map_location = device).moveaxis(2, 0)
-global_f_1, global_delta_1 = torch.load(f"Generated_Datasets/DA/Case_{case}/False_forcings.pt", map_location = device).moveaxis(2, 0)
-theta_target = torch.load(f"Generated_Datasets/DA/Case_{case}/Theta.pt", map_location = device)
+global_f_0, global_m_0 = torch.load(f"Generated_Datasets/DA/Case_{case}/True_forcings.pt", map_location = device, weights_only=False).moveaxis(2, 0)
+global_f_1, global_m_1 = torch.load(f"Generated_Datasets/DA/Case_{case}/False_forcings.pt", map_location = device, weights_only=False).moveaxis(2, 0)
+theta_target = torch.load(f"Generated_Datasets/DA/Case_{case}/Theta.pt", map_location = device, weights_only=False)
 
 
 selection_model = pd.DataFrame(listdir(name_file+f"version_{nb_version}/top_10/"), columns = ["file_name"])
@@ -155,7 +161,12 @@ selection_model["valid_loss"] = [logs_clean[logs_clean.epoch == top_model_epoch]
 
 chckpt_path = name_file+f"version_{nb_version}/top_10/"+selection_model[selection_model.valid_loss == min(selection_model.valid_loss)].file_name.item()
 
-MyNet_val = ModelNN.load_from_checkpoint(chckpt_path, mean = mean_y, std = std_y, lr = lr, sampling_patt = sampling_patt)
+if model == "CNN" :
+    MyNet_val = ModelNN.load_from_checkpoint(chckpt_path, mean = mean_y, std = std_y, lr = lr, sampling_patt = sampling_patt)
+elif model == 'MLP' :
+    MyNet_val = Model_MLP.load_from_checkpoint(chckpt_path, mean = mean_y, std = std_y, lr = lr, sampling_patt = sampling_patt)
+elif model == 'UNET' :
+    MyNet_val = Model_UNet.load_from_checkpoint(chckpt_path, mean = mean_y, std = std_y, lr = lr, sampling_patt = sampling_patt)
 MyNet_val.eval().to(device)
 
 for x, y in DL :
@@ -168,9 +179,9 @@ corr_tensor, corr_tensor_init = torch.zeros([2, global_f_0.shape[0], 4])
 shift_tensor, shift_tensor_init = torch.zeros([2, global_f_0.shape[0], 4])
 ampl_tensor, ampl_tensor_init = torch.zeros([2, global_f_0.shape[0], 4])
 
-(x_ref, N_ref, P_ref, Z_ref, D_ref) = function_NPZD(t_range = torch.arange(0*365, 5*365, dt), global_f = global_f_1, global_delta = global_delta_1, theta_values = theta_target)
-(x_pred, N_pred, P_pred, Z_pred, D_pred) = function_NPZD(t_range = torch.arange(0*365, 5*365, dt), global_f = global_f_1, global_delta = global_delta_1, theta_values = theta_got)
-(x_init, N_init, P_init, Z_init, D_init) = function_NPZD(t_range = torch.arange(0*365, 5*365, dt), global_f = global_f_1, global_delta = global_delta_1, theta_values = theta_rdm)
+(x_ref, N_ref, P_ref, Z_ref, D_ref) = function_NPZD(t_range = torch.arange(0*365, 5*365, dt), global_f = global_f_1, global_m = global_m_1, theta_values = theta_target)
+(x_pred, N_pred, P_pred, Z_pred, D_pred) = function_NPZD(t_range = torch.arange(0*365, 5*365, dt), global_f = global_f_1, global_m = global_m_1, theta_values = theta_got)
+(x_init, N_init, P_init, Z_init, D_init) = function_NPZD(t_range = torch.arange(0*365, 5*365, dt), global_f = global_f_1, global_m = global_m_1, theta_values = theta_rdm)
 
 
 
@@ -237,25 +248,25 @@ ax_shift.set_ylim(-1, 15)
 ax_ampl.set_title("Amplitude ratio")
 ax_ampl.set_ylim(0., 2.)
 ax_param.set_title("Biogeochemical parameter error")
-ax_param.set_ylim(-0.2, .5)
+ax_param.set_ylim(-0.5, .5)
 c_DA, s_DA, r_DA, p_DA, i_DA = [], [], [], [], []
 
 for i in range(1, 5) :
-    corr_to_plot = torch.ones(corr_tensor.transpose(0, 1).shape)*1000
-    corr_to_plot[i-1, :] = corr_tensor.transpose(0, 1)[i-1, :]
-    shift_to_plot = torch.ones(shift_tensor.transpose(0, 1).shape)*1000
-    shift_to_plot[i-1, :] = abs(shift_tensor.transpose(0, 1))[i-1, :]
-    ampl_to_plot = torch.ones(ampl_tensor.transpose(0, 1).shape)*1000
-    ampl_to_plot[i-1, :] = ampl_tensor.transpose(0, 1)[i-1, :]
+    corr_to_plot = torch.ones(corr_tensor.shape)*1000
+    corr_to_plot[:, i-1] = corr_tensor[:, i-1]
+    shift_to_plot = torch.ones(shift_tensor.shape)*1000
+    shift_to_plot[:, i-1] = abs(shift_tensor)[:, i-1]
+    ampl_to_plot = torch.ones(ampl_tensor.shape)*1000
+    ampl_to_plot[:, i-1] = ampl_tensor[:, i-1]
     c_DA.append(ax_corr.violinplot(corr_to_plot, showextrema=False))
     s_DA.append(ax_shift.violinplot(shift_to_plot, showextrema=False))
     r_DA.append(ax_ampl.violinplot(ampl_to_plot, showextrema=False))
-p_DA = ax_param.violinplot((torch.sqrt((theta_got.detach()-theta_target)**2)/mean_y).transpose(0, 1), showextrema=False)
+p_DA = ax_param.violinplot(((theta_got.detach()-theta_target)/mean_y), showextrema=False)
 
-i_DA.append(ax_corr.violinplot(corr_tensor_init.transpose(0, 1), showextrema=False))
-i_DA.append(ax_shift.violinplot(abs(shift_tensor_init).transpose(0, 1), showextrema=False))
-i_DA.append(ax_ampl.violinplot(ampl_tensor_init.transpose(0, 1), showextrema=False))
-i_DA.append(ax_param.violinplot((torch.sqrt((theta_rdm-theta_target)**2)/mean_y).transpose(0, 1), showextrema=False))
+i_DA.append(ax_corr.violinplot(corr_tensor_init, showextrema=False))
+i_DA.append(ax_shift.violinplot(abs(shift_tensor_init), showextrema=False))
+i_DA.append(ax_ampl.violinplot(ampl_tensor_init, showextrema=False))
+i_DA.append(ax_param.violinplot(((theta_rdm-theta_target)/mean_y), showextrema=False))
 
 for i in range(4) :
     for pc in i_DA[i]['bodies']: # initial metrics for corr, shift, ampl, param
@@ -268,9 +279,9 @@ for pc in p_DA['bodies']: # params
     pc.set_edgecolor(color_params[0][1])
     pc.set_linewidth(3)
 for i in range(10) :
-    ax_param.vlines(i+1, (torch.sqrt((theta_got.detach()-theta_target)**2)/mean_y)[:, i].min().item(), (torch.sqrt((theta_got.detach()-theta_target)**2)/mean_y)[:, i].max().item(), color=color_params[0][1], linestyle='-.', lw=2)
-    ax_param.hlines((torch.sqrt((theta_got.detach()-theta_target)**2)/mean_y)[:, i].min().item(), xmin = i+0.9, xmax = i+1.1, color=color_params[0][1], linestyle='-', lw=2)
-    ax_param.hlines((torch.sqrt((theta_got.detach()-theta_target)**2)/mean_y)[:, i].max().item(), xmin = i+0.9, xmax = i+1.1, color=color_params[0][1], linestyle='-', lw=2)
+    ax_param.vlines(i+1, ((theta_got.detach()-theta_target)/mean_y)[:, i].min().item(), ((theta_got.detach()-theta_target)/mean_y)[:, i].max().item(), color=color_params[0][1], linestyle='-.', lw=2)
+    ax_param.hlines(((theta_got.detach()-theta_target)/mean_y)[:, i].min().item(), xmin = i+0.9, xmax = i+1.1, color=color_params[0][1], linestyle='-', lw=2)
+    ax_param.hlines(((theta_got.detach()-theta_target)/mean_y)[:, i].max().item(), xmin = i+0.9, xmax = i+1.1, color=color_params[0][1], linestyle='-', lw=2)
 
 for i in range(4) :
     for pc in c_DA[i]['bodies']: #corr
@@ -305,7 +316,7 @@ for ax in [ax_corr, ax_shift, ax_ampl] :
     ax.set_xticks([1, 2, 3, 4], ["N", "P", "Z", "D"])
 
 ax_param.grid()
-ax_param.set_xticks(torch.arange(1, 11, 1), ["$K_N$", "$R_m$", "$g$", r"$\lambda$", r"$\epsilon$", r"$\alpha$", r"$\beta$", "$r$", r"$\phi$", '$S_w$'])
+ax_param.set_xticks(torch.arange(1, 11, 1), [r"$\chi$", r"$\rho$", r"$\gamma$", r"$\lambda$", r"$\epsilon$", r"$\alpha$", r"$\beta$", r"$\eta$", r"$\varphi$", r'$\zeta$'])
 plt.rc('axes', titlesize=14)
 plt.rc('axes', labelsize=14) #fontsize of the x and y labels
 plt.rc('xtick', labelsize=14) #fontsize of the x tick labels
@@ -315,5 +326,51 @@ plt.subplots_adjust(bottom=0.15, wspace=0.15)
 plt.tight_layout()
 plt.savefig(name_file+f"version_{nb_version}/Plot_validation_metrics", dpi = 200)
 
+
+####################################################################
+######################      ENSEMBLE      ##########################
+####################################################################
+
+DS_test_ensemble = torch.load(f"Generated_Datasets/DA/Case_{case}/DS_test_NN_ensemble_20", map_location = device, weights_only=False)
+DL_ensemble = DataLoader(DS_test_ensemble, batch_size = 100)
+    
+theta_target = torch.load(f"Generated_Datasets/DA/Case_{case}/Theta.pt", map_location = device, weights_only=False)
+    
+
+selection_model = pd.DataFrame(listdir(name_file+f"version_{nb_version}/top_10/"), columns = ["file_name"])
+selection_model["epoch"] = [int(path_model.lstrip("chkpt_epoch=").rstrip(".ckpt")) for path_model in selection_model.file_name]
+
+logs = pd.read_csv(name_file+f"version_{nb_version}/lightning_logs/version_0/metrics.csv", header = 0)
+tensor_logs = torch.from_numpy(np.array([logs.epoch.unique()]))
+for name_col in ["train_loss_epoch", "valid_loss"] :
+    new_col = torch.from_numpy(np.array([[np.nanmin(logs[logs.epoch == i_epoch][name_col]) for i_epoch in logs.epoch.unique()]]))
+    tensor_logs = torch.cat((tensor_logs, new_col), dim = 0)
+logs_clean = pd.DataFrame(tensor_logs.transpose(0, 1), columns = ["epoch", "train_loss", "valid_loss"])
+
+selection_model["valid_loss"] = [logs_clean[logs_clean.epoch == top_model_epoch].valid_loss.item() for top_model_epoch in selection_model.epoch]
+
+chckpt_path = name_file+f"version_{nb_version}/top_10/"+selection_model[selection_model.valid_loss == min(selection_model.valid_loss)].file_name.item()
+
+
+if model == "CNN" :
+    MyNet_val = ModelNN.load_from_checkpoint(chckpt_path, mean = mean_y, std = std_y, lr = lr, sampling_patt = sampling_patt)
+elif model == 'MLP' :
+    MyNet_val = Model_MLP.load_from_checkpoint(chckpt_path, mean = mean_y, std = std_y, lr = lr, sampling_patt = sampling_patt)
+elif model == 'UNET' :
+    MyNet_val = Model_UNet.load_from_checkpoint(chckpt_path, mean = mean_y, std = std_y, lr = lr, sampling_patt = sampling_patt)
+
+MyNet_val.eval().to(device)
+print(f"start infering with version {chckpt_path}")
+for x, y in DL_ensemble :
+    for samp in range(x.shape[-1]) :
+        if not samp :
+            theta_NN = (MyNet_val(x[:, :, :, samp]).detach()*std_y+mean_y)[None]
+        else :
+            theta_NN = torch.cat((theta_NN, (MyNet_val(x[:, :, :, samp]).detach()*std_y+mean_y)[None]), dim = 0)
+    # print(f"Loss {torch.mean((theta_NN.mean(dim=0)-(theta_target-mean_y)/std_y)**2)}")
+    # print(f"NRMSE {torch.mean(abs((theta_NN.mean(dim=0)-(theta_target-mean_y)/std_y)))}")
+
+theta_ens = torch.mean(theta_NN, dim = 0)
+torch.save(theta_ens, name_file+f"version_{nb_version}/Validation_tensor_theta_pred_DA_ens.pt")
 
 print("End of the script")
